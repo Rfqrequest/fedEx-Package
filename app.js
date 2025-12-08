@@ -78,16 +78,9 @@ async function getLocationFromIp(ip) {
 }
 
 async function sendTelegramAlert(message) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: message })
-    });
-  } catch (e) {
-    console.error('Telegram error:', e);
-  }
+  // Telegram temporarily disabled due to Render timeouts
+  console.log('Telegram skipped:', message);
+  return;
 }
 
 // 🚨 INTRUDER MONITOR - Logs EVERY click/attempt
