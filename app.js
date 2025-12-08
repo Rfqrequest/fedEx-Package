@@ -4,17 +4,12 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const useragent = require('useragent');
-const https = require('https');
 const fetch = require('node-fetch');
-const { Resend } = require('resend');  // ✅ NEW: Resend for email
+const https = require('https');
+const crypto = require('crypto');  // Node.js built-in
+const { Resend } = require('resend');  // ✅ Resend
 
 const app = express();
-
-// ✅ NEW: Resend client (no more Nodemailer!)
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const allowedOrigins = [
