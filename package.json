@@ -1,17 +1,18 @@
 {
   "name": "fedex-tracker-backend",
   "version": "1.0.0",
+  "description": "FedEx-style tracking backend with Resend logging",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "jsonwebtoken": "^9.0.2",
     "body-parser": "^1.20.2",
-    "resend": "^3.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
     "node-fetch": "^2.7.0",
-    "dotenv": "^16.3.1"
+    "resend": "^3.2.0"
   }
 }

